@@ -154,7 +154,14 @@ def _enrol_tab() -> None:
     left, right = st.columns([1, 1], gap="large")
     with left:
         st.markdown("<div class='frs-section'>New enrolment</div>", unsafe_allow_html=True)
-        user_id = matcher.next_user_id()
+        try:
+            user_id = matcher.next_user_id()
+        except Exception:
+            st.error(
+                "The enrolment database is unavailable. Check the Streamlit "
+                "DATABASE_URL secret and the Supabase project status."
+            )
+            return
         st.markdown(f"<span class='frs-chip'>{html.escape(user_id)}</span>",
                     unsafe_allow_html=True)
         name = st.text_input("Full name", key="enrol_name")

@@ -59,6 +59,29 @@ class MatcherTests(unittest.TestCase):
         self.assertEqual(matcher.clear_all(), 1)
         self.assertEqual(matcher.count_enrolled(), 0)
 
+    def test_remote_database_without_sslmode_enforces_tls(self):
+        url = "postgresql://runtime:secret@pooler.example.com:5432/postgres"
+        self.assertEqual(matcher._remote_ssl_kwargs(url), {"sslmode": "require"})
+
+    def test_remote_database_keeps_secure_sslmode(self):
+        url = (
+            "postgresql://runtime:secret@pooler.example.com:5432/postgres"
+            "?sslmode=verify-full"
+        )
+        self.assertEqual(matcher._remote_ssl_kwargs(url), {})
+
+    def test_remote_database_rejects_explicit_insecure_sslmode(self):
+        url = (
+            "postgresql://runtime:secret@pooler.example.com:5432/postgres"
+            "?sslmode=disable"
+        )
+        with self.assertRaisesRegex(ValueError, "sslmode=require"):
+            matcher._remote_ssl_kwargs(url)
+
+    def test_local_database_does_not_force_tls(self):
+        url = "postgresql://runtime:secret@localhost:5432/postgres"
+        self.assertEqual(matcher._remote_ssl_kwargs(url), {})
+
 
 if __name__ == "__main__":
     unittest.main()

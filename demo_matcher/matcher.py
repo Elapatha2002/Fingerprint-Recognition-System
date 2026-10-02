@@ -63,21 +63,38 @@ def using_supabase() -> bool:
     return bool(DATABASE_URL)
 
 
+def _remote_ssl_kwargs(database_url: str) -> dict[str, str]:
+    """Enforce encrypted PostgreSQL transport for every non-loopback host.
+
+    Supabase/Streamlit secret entry can accidentally omit ``sslmode`` from an
+    otherwise valid URL. In that case psycopg receives an explicit secure
+    default. An explicitly insecure mode is still rejected.
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
+    options = conninfo_to_dict(database_url)
+    if options.get("host") in {"localhost", "127.0.0.1", "::1"}:
+        return {}
+    sslmode = options.get("sslmode")
+    if not sslmode:
+        return {"sslmode": "require"}
+    if sslmode not in {"require", "verify-ca", "verify-full"}:
+        raise ValueError("Remote PostgreSQL requires sslmode=require or stronger.")
+    return {}
+
+
 @contextmanager
 def _database_connection():
     import psycopg
-    from psycopg.conninfo import conninfo_to_dict
     from psycopg.rows import dict_row
 
-    options = conninfo_to_dict(DATABASE_URL)
-    if options.get("host") not in {"localhost", "127.0.0.1", "::1"}:
-        if options.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
-            raise ValueError("Remote PostgreSQL requires sslmode=require or stronger.")
+    ssl_kwargs = _remote_ssl_kwargs(DATABASE_URL)
     with psycopg.connect(
         DATABASE_URL,
         connect_timeout=10,
         row_factory=dict_row,
         prepare_threshold=None,
+        **ssl_kwargs,
     ) as connection:
         connection.execute("SET LOCAL statement_timeout = '30s'")
         yield connection
