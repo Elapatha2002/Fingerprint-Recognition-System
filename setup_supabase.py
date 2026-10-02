@@ -43,6 +43,25 @@ def _runtime_url(admin_url: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path or "/postgres", query, ""))
 
 
+def _role_statement(action: str, password: str) -> sql.Composed:
+    """Build CREATE/ALTER ROLE safely without a server-side bind marker.
+
+    PostgreSQL utility statements do not accept ``$1`` for a role password.
+    ``sql.Literal`` still quotes the generated password through psycopg, while
+    ``sql.Identifier`` safely quotes the fixed role name.
+    """
+    if action not in {"CREATE", "ALTER"}:
+        raise ValueError("Role action must be CREATE or ALTER.")
+    return sql.SQL(
+        "{} ROLE {} WITH LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+        "NOCREATEROLE NOINHERIT"
+    ).format(
+        sql.SQL(action),
+        sql.Identifier(ROLE),
+        sql.Literal(password),
+    )
+
+
 def main() -> int:
     print("Fingerprint Recognition System - Supabase setup")
     print("Use the Session pooler connection string from the NEW Supabase project.")
@@ -67,17 +86,9 @@ def main() -> int:
             "SELECT 1 FROM pg_roles WHERE rolname = %s", (ROLE,)
         ).fetchone()
         if role_exists:
-            connection.execute(
-                sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD %s NOSUPERUSER NOCREATEDB "
-                        "NOCREATEROLE NOINHERIT").format(sql.Identifier(ROLE)),
-                (runtime_password,),
-            )
+            connection.execute(_role_statement("ALTER", runtime_password))
         else:
-            connection.execute(
-                sql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD %s NOSUPERUSER NOCREATEDB "
-                        "NOCREATEROLE NOINHERIT").format(sql.Identifier(ROLE)),
-                (runtime_password,),
-            )
+            connection.execute(_role_statement("CREATE", runtime_password))
         connection.execute("CREATE SCHEMA IF NOT EXISTS fingerprint_demo")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS fingerprint_demo.enrolments (
