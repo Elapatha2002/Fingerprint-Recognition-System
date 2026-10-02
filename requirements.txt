@@ -1,0 +1,5 @@
+streamlit>=1.57,<2
+pillow>=10,<13
+numpy>=1.26,<3
+python-dotenv>=1,<2
+psycopg[binary]>=3.2,<4

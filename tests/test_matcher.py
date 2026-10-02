@@ -1,0 +1,64 @@
+"""Regression checks for the independent matcher without biometric fixtures."""
+from __future__ import annotations
+
+import io
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+from PIL import Image
+
+from demo_matcher import matcher
+
+
+def image_bytes(array: np.ndarray) -> bytes:
+    buffer = io.BytesIO()
+    Image.fromarray(array.astype(np.uint8), mode="L").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class MatcherTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.patchers = [
+            patch.object(matcher, "DATABASE_URL", ""),
+            patch.object(matcher, "ENROL_DIR", root),
+            patch.object(matcher, "INDEX_PATH", root / "index.json"),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp.cleanup()
+
+    def test_enrol_and_identify_same_pattern(self):
+        pattern = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
+        matcher.enrol("USR-001", "Test Person", image_bytes(pattern), "Right index")
+        result = matcher.match(image_bytes(pattern))
+        self.assertTrue(result.matched)
+        self.assertEqual(result.user_id, "USR-001")
+        self.assertAlmostEqual(result.score, 1.0, places=5)
+
+    def test_different_pattern_is_rejected(self):
+        horizontal = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
+        vertical = horizontal.T
+        matcher.enrol("USR-001", "Test Person", image_bytes(horizontal))
+        result = matcher.match(image_bytes(vertical))
+        self.assertFalse(result.matched)
+
+    def test_delete_and_clear(self):
+        pattern = np.indices((256, 256)).sum(axis=0) % 256
+        matcher.enrol("USR-001", "One", image_bytes(pattern))
+        matcher.enrol("USR-002", "Two", image_bytes(255 - pattern))
+        self.assertTrue(matcher.delete_enrolment("USR-001"))
+        self.assertEqual(matcher.clear_all(), 1)
+        self.assertEqual(matcher.count_enrolled(), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

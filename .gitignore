@@ -1,0 +1,21 @@
+# Private configuration
+.env
+.env.*
+!.env.example
+
+# Biometric enrolments remain local until explicitly migrated to Supabase
+demo_matcher/enrolments/*
+!demo_matcher/enrolments/.gitignore
+
+# Python and Streamlit runtime files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.streamlit/secrets.toml
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
