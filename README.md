@@ -88,12 +88,11 @@ then use **Enroll**, **Identify**, and **Directory**.
 
 Never commit `.env` or anything in `demo_matcher/enrolments`.
 
+The local repository and first commit are already prepared. Create an empty
+GitHub repository named `fingerprint-recognition-demo`, then run:
+
 ```powershell
-git init
-git add .
 git status
-git commit -m "Create standalone fingerprint recognition demonstration"
-git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/fingerprint-recognition-demo.git
 git push -u origin main
 ```
