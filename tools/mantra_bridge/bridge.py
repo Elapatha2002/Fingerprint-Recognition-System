@@ -202,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local browser bridge for Mantra MFS100")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--token", help="Pairing code; generated and persisted when omitted")
     parser.add_argument("--allow-origin", action="append", default=[],
                         help="Exact Streamlit origin, e.g. https://fsd.example.com")

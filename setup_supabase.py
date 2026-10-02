@@ -123,7 +123,7 @@ def main() -> int:
         f"FRS_ACCESS_PASSWORD_HASH={access_hash}\n"
         "MATCH_THRESHOLD=0.55\n"
         "MANTRA_SENSOR_TRANSPORT=auto\n"
-        "MANTRA_BRIDGE_URL=http://127.0.0.1:8765\n",
+        "MANTRA_BRIDGE_URL=http://127.0.0.1:8766\n",
         encoding="utf-8",
     )
     os.environ["DATABASE_URL"] = runtime_url

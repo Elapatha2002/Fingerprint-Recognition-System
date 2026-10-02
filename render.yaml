@@ -18,4 +18,4 @@ services:
       - key: MANTRA_SENSOR_TRANSPORT
         value: bridge
       - key: MANTRA_BRIDGE_URL
-        value: http://127.0.0.1:8765
+        value: http://127.0.0.1:8766

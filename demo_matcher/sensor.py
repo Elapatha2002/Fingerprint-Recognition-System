@@ -1,5 +1,4 @@
 """Independent Mantra MFS100 capture adapter for the recognition demo."""
-from __future__ import annotations
 
 import base64
 import io
@@ -49,7 +48,8 @@ def capture_transport() -> str:
 
 
 def bridge_url() -> str:
-    return os.environ.get("MANTRA_BRIDGE_URL", "http://127.0.0.1:8765").rstrip("/")
+    # Keep the standalone demonstration separate from FSD-XAI's port 8765.
+    return os.environ.get("MANTRA_BRIDGE_URL", "http://127.0.0.1:8766").rstrip("/")
 
 
 def _powershell32() -> Path:

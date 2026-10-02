@@ -142,7 +142,8 @@ In the hosted app:
 5. Select **Capture fingerprint** and place the finger on the scanner.
 
 The bridge binds only to `127.0.0.1`, checks the exact hosted web origin and
-requires the pairing code. Never forward port `8765` through a router or expose
+requires the pairing code. It uses port `8766` so it can run beside the
+FSD-XAI bridge on port `8765`. Never forward port `8766` through a router or expose
 it through a public reverse proxy.
 
 ## Viva flow
