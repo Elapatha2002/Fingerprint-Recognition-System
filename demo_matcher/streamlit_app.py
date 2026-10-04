@@ -50,6 +50,7 @@ CSS = """
   .frs-result { border-radius:12px; padding:22px 24px; margin-top:18px; }
   .frs-match { background:#14532d; border-left:4px solid #22c55e; }
   .frs-no-match { background:#7f1d1d; border-left:4px solid #ef4444; }
+  .frs-ambiguous { background:#713f12; border-left:4px solid #f59e0b; }
   .frs-result-name { color:white; font-size:25px; font-weight:750; margin:5px 0; }
   .frs-result-meta { color:#e2e8f0; font:12px ui-monospace,monospace; }
   [data-testid="stForm"] { border-color:#334155; }
@@ -204,8 +205,14 @@ def _identify_tab() -> None:
                     unsafe_allow_html=True)
         capture, is_new = _capture_widget("identify_capture", "identify_sensor")
         if is_new:
+            st.session_state.pop("identify_result", None)
             try:
                 st.session_state["identify_result"] = matcher.match(capture.image_bytes)
+            except matcher.LegacyTemplateError as error:
+                st.error(
+                    f"{error} Open Directory, clear the old enrolments, then "
+                    "capture and enrol every person again."
+                )
             except Exception as error:
                 st.error(f"Identification failed: {error}")
     with right:
@@ -224,6 +231,15 @@ def _identify_tab() -> None:
             f"<div class='frs-result-name'>{name}</div>"
             f"<div class='frs-result-meta'>user_id = {user_id} · "
             f"similarity = {result.score:.3f} · threshold = {result.threshold:.2f}</div></div>",
+            unsafe_allow_html=True,
+        )
+    elif result.reason == "ambiguous":
+        st.markdown(
+            "<div class='frs-result frs-ambiguous'><div>Ambiguous result</div>"
+            "<div class='frs-result-name'>No identity assigned</div>"
+            f"<div class='frs-result-meta'>best similarity = {result.score:.3f} · "
+            f"second = {result.second_score:.3f} · margin = {result.margin:.3f} · "
+            f"required margin = {matcher.MATCH_MARGIN:.2f}</div></div>",
             unsafe_allow_html=True,
         )
     else:

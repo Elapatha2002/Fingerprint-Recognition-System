@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -17,6 +18,25 @@ def image_bytes(array: np.ndarray) -> bytes:
     buffer = io.BytesIO()
     Image.fromarray(array.astype(np.uint8), mode="L").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def fingerprint_pattern(seed: int) -> np.ndarray:
+    """Create a feature-rich synthetic ridge pattern without biometric data."""
+    random = np.random.default_rng(seed)
+    pattern = np.full((360, 320), 245, dtype=np.uint8)
+    centre = (160 + (seed % 3) * 3, 210)
+    for radius in range(25, 145, 7):
+        start = int(random.integers(0, 25))
+        end = int(random.integers(330, 360))
+        colour = int(30 + random.integers(0, 30))
+        cv2.ellipse(
+            pattern, centre, (radius, int(radius * 1.2)),
+            0, start, end, colour, 2,
+        )
+    for _ in range(45):
+        point = (int(random.integers(45, 275)), int(random.integers(65, 335)))
+        cv2.circle(pattern, point, int(random.integers(1, 3)), 30, -1)
+    return cv2.GaussianBlur(pattern, (3, 3), 0.5)
 
 
 class MatcherTests(unittest.TestCase):
@@ -37,7 +57,7 @@ class MatcherTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_enrol_and_identify_same_pattern(self):
-        pattern = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
+        pattern = fingerprint_pattern(1)
         matcher.enrol("USR-001", "Test Person", image_bytes(pattern), "Right index")
         result = matcher.match(image_bytes(pattern))
         self.assertTrue(result.matched)
@@ -45,16 +65,38 @@ class MatcherTests(unittest.TestCase):
         self.assertAlmostEqual(result.score, 1.0, places=5)
 
     def test_different_pattern_is_rejected(self):
-        horizontal = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
-        vertical = horizontal.T
-        matcher.enrol("USR-001", "Test Person", image_bytes(horizontal))
-        result = matcher.match(image_bytes(vertical))
+        matcher.enrol("USR-001", "Test Person", image_bytes(fingerprint_pattern(1)))
+        result = matcher.match(image_bytes(fingerprint_pattern(9)))
         self.assertFalse(result.matched)
 
+    def test_small_rotation_and_translation_are_tolerated(self):
+        pattern = fingerprint_pattern(3)
+        transform = cv2.getRotationMatrix2D((160, 180), 6, 1.0)
+        transform[:, 2] += (7, -5)
+        moved = cv2.warpAffine(pattern, transform, (320, 360), borderValue=245)
+        matcher.enrol("USR-001", "Test Person", image_bytes(pattern))
+        result = matcher.match(image_bytes(moved))
+        self.assertTrue(result.matched)
+        self.assertEqual(result.user_id, "USR-001")
+
+    def test_duplicate_templates_are_rejected_as_ambiguous(self):
+        pattern = image_bytes(fingerprint_pattern(5))
+        matcher.enrol("USR-001", "One", pattern)
+        matcher.enrol("USR-002", "Two", pattern)
+        result = matcher.match(pattern)
+        self.assertFalse(result.matched)
+        self.assertEqual(result.reason, "ambiguous")
+        self.assertAlmostEqual(result.margin, 0.0)
+
+    def test_legacy_template_requires_reenrolment(self):
+        payload = io.BytesIO()
+        np.save(payload, np.zeros(matcher.LEGACY_TEMPLATE_SIZE, dtype=np.float32))
+        with self.assertRaisesRegex(matcher.LegacyTemplateError, "re-enrol"):
+            matcher._deserialize(payload.getvalue())
+
     def test_delete_and_clear(self):
-        pattern = np.indices((256, 256)).sum(axis=0) % 256
-        matcher.enrol("USR-001", "One", image_bytes(pattern))
-        matcher.enrol("USR-002", "Two", image_bytes(255 - pattern))
+        matcher.enrol("USR-001", "One", image_bytes(fingerprint_pattern(2)))
+        matcher.enrol("USR-002", "Two", image_bytes(fingerprint_pattern(8)))
         self.assertTrue(matcher.delete_enrolment("USR-001"))
         self.assertEqual(matcher.clear_all(), 1)
         self.assertEqual(matcher.count_enrolled(), 0)

@@ -122,6 +122,9 @@ def main() -> int:
         f"DATABASE_URL={runtime_url}\n"
         f"FRS_ACCESS_PASSWORD_HASH={access_hash}\n"
         "MATCH_THRESHOLD=0.55\n"
+        "MATCH_MARGIN=0.08\n"
+        "MIN_FINGERPRINT_KEYPOINTS=60\n"
+        "MIN_GEOMETRIC_INLIERS=10\n"
         "MANTRA_SENSOR_TRANSPORT=auto\n"
         "MANTRA_BRIDGE_URL=http://127.0.0.1:8766\n",
         encoding="utf-8",

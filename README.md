@@ -3,22 +3,28 @@
 This is a standalone viva demonstration. It is intentionally **not** a spoof
 detection system and has no runtime connection to FSD-XAI.
 
-The demonstration enrols a fingerprint and performs 1:N image-similarity
-matching. Its purpose is to show that an ordinary recognition workflow can
+The demonstration enrols a fingerprint and performs 1:N feature matching.
+Its purpose is to show that an ordinary recognition workflow can
 accept a sufficiently similar spoof of the enrolled finger, motivating the
 need for presentation-attack detection.
 
 ## What is stored
 
 - Captured raw images are kept only in the active Streamlit session.
-- Enrolment creates a normalized 128 x 128 `float32` template.
+- Enrolment creates a versioned ORB local-feature template. Raw fingerprint
+  pixels are not stored in the template.
 - With Supabase configured, the template and metadata are stored in the
   private `fingerprint_demo.enrolments` PostgreSQL table.
 - Without Supabase, local rehearsal data is stored in
   `demo_matcher/enrolments`; this directory is ignored by Git.
 
-The matcher is a controlled demonstration, not an AFIS, identity product,
-security control, or forensic identification method.
+Matching combines descriptor similarity with RANSAC geometric verification,
+then rejects results that are too close to the runner-up. This improves
+translation/rotation tolerance and prevents database-order tie resolution.
+It remains a controlled demonstration, not an AFIS, identity product,
+security control, or forensic identification method. Thresholds must be
+validated on a representative genuine/impostor dataset before any operational
+use.
 
 ## 1. Install locally
 
@@ -39,7 +45,7 @@ py -3.13 -m venv .venv
 4. Copy its administrator connection string.
 5. Keep the database password private.
 
-No Storage bucket is required: only normalized templates are persisted, not
+No Storage bucket is required: only feature templates are persisted, not
 raw captures.
 
 ## 3. Provision the private schema
@@ -60,14 +66,16 @@ asked. The script:
 - stores the restricted runtime URL and a password hash in `.env`;
 - never stores the Supabase administrator password.
 
-To copy the legacy local viva enrolment into the new project after setup:
+Only current feature templates can be copied from local storage after setup:
 
 ```powershell
 .\.venv\Scripts\python.exe -c "from demo_matcher.matcher import migrate_local_enrolments; print(migrate_local_enrolments())"
 ```
 
-Delete the legacy local files after confirming the Supabase copy if the
-participant did not consent to continued local retention.
+The retired 128 x 128 correlation templates cannot be converted into reliable
+local features. Clear those enrolments and recapture each enrolled finger.
+Delete local files after confirming the Supabase copy if the participant did
+not consent to continued local retention.
 
 ## 4. Run locally with the MFS100
 
@@ -97,7 +105,7 @@ git remote add origin https://github.com/YOUR_USERNAME/fingerprint-recognition-d
 git push -u origin main
 ```
 
-Before committing, verify that neither `.env`, `index.json`, nor `.npy` files
+Before committing, verify that neither `.env`, `index.json`, `.npy`, nor `.npz` files
 appear in `git status`.
 
 ## 6. Host on Render
@@ -155,5 +163,6 @@ it through a public reverse proxy.
 5. Explain that similarity is not evidence of liveness.
 6. Demonstrate FSD-XAI separately as the PAD system.
 
-Keep finger placement and rotation consistent because this intentionally small
-matcher uses normalized image correlation rather than minutiae alignment.
+Use the same named finger and obtain a clear, flat capture. The matcher permits
+modest translation and rotation, but it is an ORB/RANSAC demonstration rather
+than a production minutiae matcher.
