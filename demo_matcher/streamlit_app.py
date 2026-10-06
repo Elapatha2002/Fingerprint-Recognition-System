@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import hashlib
+import secrets
 import sys
 from pathlib import Path
 
@@ -15,10 +17,10 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 import streamlit as st  # noqa: E402
 
-from demo_matcher import auth, matcher  # noqa: E402
+from demo_matcher import auth, matcher, sdk_matcher  # noqa: E402
 from demo_matcher.sensor import (  # noqa: E402
     SensorError, bridge_url, capture_fingerprint, capture_transport,
-    from_bridge_payload, is_available,
+    from_bridge_payload, is_available, match_templates,
 )
 
 
@@ -33,13 +35,13 @@ st.set_page_config(
 CSS = """
 <style>
   :root { color-scheme: dark; }
-  .block-container { max-width: 1180px; padding-top: 2rem; }
+  .block-container { max-width: 1180px; padding-top: 5rem; }
+  .st-key-frs_sign_out { display:flex; justify-content:flex-end; }
+  .st-key-frs_sign_out button { min-height:42px; margin:0; white-space:nowrap; }
   .frs-header { display:flex; justify-content:space-between; align-items:flex-start;
     gap:24px; margin-bottom:24px; }
   .frs-title { font-size:30px; font-weight:750; letter-spacing:-.02em; }
   .frs-subtitle { color:#94a3b8; margin-top:5px; }
-  .frs-badge { border:1px solid #334155; border-radius:999px; padding:7px 11px;
-    color:#cbd5e1; font-size:12px; white-space:nowrap; }
   .frs-section { color:#94a3b8; font-size:12px; font-weight:700;
     letter-spacing:.08em; text-transform:uppercase; margin:4px 0 12px; }
   .frs-chip { display:inline-block; padding:8px 13px; border-radius:8px;
@@ -83,7 +85,6 @@ def _login_gate() -> bool:
 
 
 def _header() -> None:
-    backend = "Supabase" if matcher.using_supabase() else "Local rehearsal"
     st.markdown(CSS, unsafe_allow_html=True)
     left, right = st.columns([5, 1])
     with left:
@@ -91,11 +92,11 @@ def _header() -> None:
             "<div class='frs-header'><div><div class='frs-title'>"
             "Fingerprint Recognition Demonstration</div>"
             "<div class='frs-subtitle'>1:N identification without spoof detection</div>"
-            f"</div><span class='frs-badge'>{backend}</span></div>",
+            "</div></div>",
             unsafe_allow_html=True,
         )
     with right:
-        if st.button("Sign out", use_container_width=True):
+        if st.button("Sign out", key="frs_sign_out", use_container_width=True):
             st.session_state.clear()
             st.rerun()
     st.info(
@@ -117,13 +118,21 @@ def _preview(capture) -> None:
     )
 
 
-def _capture_widget(state_key: str, component_key: str) -> tuple[object | None, bool]:
+def _capture_widget(state_key: str, component_key: str, matching=None) -> tuple[object | None, bool]:
     """Render direct or hosted capture and return (capture, newly_captured)."""
     captured = st.session_state.get(state_key)
     if capture_transport() == "bridge":
         from demo_matcher.components.mantra_capture import render_mantra_capture
 
-        payload = render_mantra_capture(bridge_url=bridge_url(), key=component_key)
+        payload = render_mantra_capture(bridge_url=bridge_url(), key=component_key, matching=matching)
+        if payload and not payload.get("ok"):
+            st.session_state.pop(state_key, None)
+            st.session_state.pop(f"{state_key}_match_result", None)
+            if state_key == "identify_capture":
+                st.session_state.pop("identify_result", None)
+            if payload.get("error"):
+                st.error(payload["error"])
+            return None, False
         if payload and payload.get("ok"):
             capture_id = payload.get("capture_id")
             seen_key = f"{state_key}_capture_id"
@@ -132,22 +141,34 @@ def _capture_widget(state_key: str, component_key: str) -> tuple[object | None, 
                     captured = from_bridge_payload(payload)
                     st.session_state[state_key] = captured
                     st.session_state[seen_key] = capture_id
+                    st.session_state[f"{state_key}_match_result"] = payload.get("match_result")
                     return captured, True
                 except SensorError as error:
+                    st.session_state.pop(state_key, None)
+                    if state_key == "identify_capture":
+                        st.session_state.pop("identify_result", None)
                     st.error(str(error))
+                    return None, False
         return captured, False
 
     available, message = is_available()
     st.caption(message)
     if st.button("Capture fingerprint", type="primary", key=component_key,
                  use_container_width=True, disabled=not available):
+        st.session_state.pop(state_key, None)
+        if state_key == "identify_capture":
+            st.session_state.pop("identify_result", None)
         try:
             with st.spinner("Scanner started — place one finger flat on the sensor."):
                 captured = capture_fingerprint()
+                if matching:
+                    st.session_state[f"{state_key}_match_result"] = match_templates(
+                        captured.iso_template, matching["candidates"], matching["request_id"])
             st.session_state[state_key] = captured
             return captured, True
-        except SensorError as error:
+        except (SensorError, ValueError) as error:
             st.error(f"Sensor error: {error}")
+            return None, False
     return captured, False
 
 
@@ -156,6 +177,7 @@ def _enrol_tab() -> None:
     with left:
         st.markdown("<div class='frs-section'>New enrolment</div>", unsafe_allow_html=True)
         try:
+            existing = matcher.list_enrolments()
             user_id = matcher.next_user_id()
         except Exception:
             st.error(
@@ -163,22 +185,39 @@ def _enrol_tab() -> None:
                 "DATABASE_URL secret and the Supabase project status."
             )
             return
+        choice = st.selectbox("Enrolment", ["New person"] + [e.user_id for e in existing],
+                              format_func=lambda v: v if v == "New person" else
+                              f"Recapture {v} — {next(e.display_name for e in existing if e.user_id == v)}")
+        selected = next((e for e in existing if e.user_id == choice), None)
+        if selected:
+            user_id = selected.user_id
+        capture_context = (choice, st.session_state.get("enrol_generation", 0))
+        if st.session_state.get("enrol_context") != capture_context:
+            st.session_state.pop("enrol_capture", None)
+            st.session_state.pop("enrol_capture_capture_id", None)
+            st.session_state["enrol_context"] = capture_context
         st.markdown(f"<span class='frs-chip'>{html.escape(user_id)}</span>",
                     unsafe_allow_html=True)
-        name = st.text_input("Full name", key="enrol_name")
+        name = st.text_input("Full name", value=selected.display_name if selected else "",
+                             key=f"enrol_name_{choice}")
+        finger_options = ["Right index", "Left index", "Right thumb", "Left thumb", "Right middle", "Left middle"]
+        if selected and selected.finger_label not in finger_options:
+            finger_options.append(selected.finger_label)
         finger = st.selectbox(
             "Finger being enrolled",
-            ["Right index", "Left index", "Right thumb", "Left thumb",
-             "Right middle", "Left middle"],
-            key="enrol_finger",
+            finger_options,
+            index=finger_options.index(selected.finger_label) if selected else 0,
+            key=f"enrol_finger_{choice}",
         )
-        capture, _ = _capture_widget("enrol_capture", "enrol_sensor")
+        capture, _ = _capture_widget("enrol_capture", f"enrol_sensor_{choice}_{capture_context[1]}")
+        confirmed = not selected or st.checkbox("Replace this person's stored template with this new capture?", key=f"replace_{choice}")
         if st.button("Save enrolment", type="primary", use_container_width=True,
-                     disabled=not bool(capture and name.strip())):
+                     disabled=not bool(capture and name.strip() and confirmed)):
             try:
-                entry = matcher.enrol(user_id, name, capture.image_bytes, finger)
+                entry = sdk_matcher.enrol(user_id, name, capture.iso_template, finger, replace=bool(selected))
                 st.session_state.pop("enrol_capture", None)
-                st.success(f"Enrolled {entry.display_name} as {entry.user_id}.")
+                st.session_state["enrol_generation"] = capture_context[1] + 1
+                st.session_state["enrol_notice"] = f"Enrolled {entry.display_name} as {entry.user_id} using Mantra ISO."
                 st.rerun()
             except Exception as error:
                 st.error(f"Enrolment failed: {error}")
@@ -186,33 +225,45 @@ def _enrol_tab() -> None:
         st.markdown("<div class='frs-section'>Captured fingerprint</div>",
                     unsafe_allow_html=True)
         _preview(st.session_state.get("enrol_capture"))
+    if st.session_state.get("enrol_notice"):
+        st.success(st.session_state.pop("enrol_notice"))
 
 
 def _identify_tab() -> None:
     try:
-        enrolment_count = matcher.count_enrolled()
+        current = sdk_matcher.gallery()
+        cutoff = sdk_matcher.threshold()
     except Exception as error:
         st.error(f"Could not read the enrolment directory: {error}")
         return
-    if enrolment_count == 0:
+    if current.legacy:
+        st.warning(f"{len(current.legacy)} older ORB/correlation enrolment(s) cannot be matched by Mantra. "
+                   "They have not been deleted. In Enroll, choose Recapture for each existing user.")
+    if not current.candidates:
         st.markdown("<div class='frs-empty'>Enroll at least one person first.</div>",
                     unsafe_allow_html=True)
         return
+
+    st.caption(f"Mantra MatchISO · SDK score threshold: {cutoff} (uncalibrated demonstration setting). "
+               "Scores are not percentages. Multiple passing identities are rejected as ambiguous.")
+    session_nonce = st.session_state.setdefault("sdk_session_nonce", secrets.token_hex(32))
+    request_id = hashlib.sha256(f"{session_nonce}:{current.revision}:{cutoff}".encode()).hexdigest()
+    if st.session_state.get("identify_directory") != request_id:
+        st.session_state.pop("identify_result", None)
+        st.session_state.pop("identify_capture", None)
+        st.session_state["identify_directory"] = request_id
+    task = {"request_id": request_id, "candidates": current.candidates}
 
     left, right = st.columns([1, 1], gap="large")
     with left:
         st.markdown("<div class='frs-section'>Identification capture</div>",
                     unsafe_allow_html=True)
-        capture, is_new = _capture_widget("identify_capture", "identify_sensor")
+        capture, is_new = _capture_widget("identify_capture", f"identify_sensor_{request_id}", task)
         if is_new:
             st.session_state.pop("identify_result", None)
             try:
-                st.session_state["identify_result"] = matcher.match(capture.image_bytes)
-            except matcher.LegacyTemplateError as error:
-                st.error(
-                    f"{error} Open Directory, clear the old enrolments, then "
-                    "capture and enrol every person again."
-                )
+                st.session_state["identify_result"] = sdk_matcher.decide(
+                    st.session_state.get("identify_capture_match_result"), current, request_id)
             except Exception as error:
                 st.error(f"Identification failed: {error}")
     with right:
@@ -230,29 +281,29 @@ def _identify_tab() -> None:
             "<div class='frs-result frs-match'><div>Match found</div>"
             f"<div class='frs-result-name'>{name}</div>"
             f"<div class='frs-result-meta'>user_id = {user_id} · "
-            f"similarity = {result.score:.3f} · threshold = {result.threshold:.2f}</div></div>",
+            f"SDK score = {result.score:.0f} · threshold = {result.threshold:.0f}</div></div>",
             unsafe_allow_html=True,
         )
     elif result.reason == "ambiguous":
         st.markdown(
             "<div class='frs-result frs-ambiguous'><div>Ambiguous result</div>"
             "<div class='frs-result-name'>No identity assigned</div>"
-            f"<div class='frs-result-meta'>best similarity = {result.score:.3f} · "
-            f"second = {result.second_score:.3f} · margin = {result.margin:.3f} · "
-            f"required margin = {matcher.MATCH_MARGIN:.2f}</div></div>",
+            f"<div class='frs-result-meta'>best SDK score = {result.score:.0f} · "
+            f"second = {result.second_score:.0f} · multiple identities meet threshold "
+            f"{result.threshold:.0f}</div></div>",
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
             "<div class='frs-result frs-no-match'><div>No match</div>"
             "<div class='frs-result-name'>Identity not recognized</div>"
-            f"<div class='frs-result-meta'>highest similarity = {result.score:.3f} · "
-            f"threshold = {result.threshold:.2f}</div></div>",
+            f"<div class='frs-result-meta'>highest SDK score = {result.score:.0f} · "
+            f"threshold = {result.threshold:.0f}</div></div>",
             unsafe_allow_html=True,
         )
-    with st.expander("Similarity against every enrolled person"):
+    with st.expander("Mantra SDK scores against eligible enrolments"):
         for user_id, score in result.ranked:
-            st.write(f"{user_id}: {score:.3f}")
+            st.write(f"{user_id}: {score:.0f}")
 
 
 def _directory_tab() -> None:

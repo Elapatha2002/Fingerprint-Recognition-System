@@ -121,10 +121,8 @@ def main() -> int:
         "# Private runtime configuration. Never commit this file.\n"
         f"DATABASE_URL={runtime_url}\n"
         f"FRS_ACCESS_PASSWORD_HASH={access_hash}\n"
-        "MATCH_THRESHOLD=0.55\n"
-        "MATCH_MARGIN=0.08\n"
-        "MIN_FINGERPRINT_KEYPOINTS=60\n"
-        "MIN_GEOMETRIC_INLIERS=10\n"
+        "# SDK native score; provisional demo cutoff, requires calibration.\n"
+        "FRS_MANTRA_MATCH_THRESHOLD=1400\n"
         "MANTRA_SENSOR_TRANSPORT=auto\n"
         "MANTRA_BRIDGE_URL=http://127.0.0.1:8766\n",
         encoding="utf-8",

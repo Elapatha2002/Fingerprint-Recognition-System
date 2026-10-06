@@ -3,24 +3,27 @@
 This is a standalone viva demonstration. It is intentionally **not** a spoof
 detection system and has no runtime connection to FSD-XAI.
 
-The demonstration enrols a fingerprint and performs 1:N feature matching.
-Its purpose is to show that an ordinary recognition workflow can
-accept a sufficiently similar spoof of the enrolled finger, motivating the
-need for presentation-attack detection.
+The demonstration enrols Mantra ISO fingerprint templates and performs 1:N
+comparison using the Windows SDK's `MatchISO`. Recognition does not establish
+liveness. Genuine and spoof outcomes must be observed, not predetermined.
+
+**Upgrading an existing installation?** Follow
+[Mantra matching upgrade](docs/MANTRA_MATCHING_UPGRADE.md). Update both the
+hosted app and the local bridge, then recapture existing users. The database
+and credentials can stay unchanged.
 
 ## What is stored
 
 - Captured raw images are kept only in the active Streamlit session.
-- Enrolment creates a versioned ORB local-feature template. Raw fingerprint
-  pixels are not stored in the template.
+- Enrolment stores a versioned Mantra ISO template, not an ORB template.
+  Raw fingerprint pixels are not stored in the template.
 - With Supabase configured, the template and metadata are stored in the
   private `fingerprint_demo.enrolments` PostgreSQL table.
 - Without Supabase, local rehearsal data is stored in
   `demo_matcher/enrolments`; this directory is ignored by Git.
 
-Matching combines descriptor similarity with RANSAC geometric verification,
-then rejects results that are too close to the runner-up. This improves
-translation/rotation tolerance and prevents database-order tie resolution.
+Matching uses native SDK scores; exactly one identity must meet the configured
+cutoff. Multiple passing identities are rejected as ambiguous.
 It remains a controlled demonstration, not an AFIS, identity product,
 security control, or forensic identification method. Thresholds must be
 validated on a representative genuine/impostor dataset before any operational
@@ -66,16 +69,10 @@ asked. The script:
 - stores the restricted runtime URL and a password hash in `.env`;
 - never stores the Supabase administrator password.
 
-Only current feature templates can be copied from local storage after setup:
-
-```powershell
-.\.venv\Scripts\python.exe -c "from demo_matcher.matcher import migrate_local_enrolments; print(migrate_local_enrolments())"
-```
-
-The retired 128 x 128 correlation templates cannot be converted into reliable
-local features. Clear those enrolments and recapture each enrolled finger.
-Delete local files after confirming the Supabase copy if the participant did
-not consent to continued local retention.
+Enrol directly into the configured backend. Old correlation/ORB templates
+cannot be converted into Mantra ISO templates. Use **Enroll > Recapture** to
+update an existing user without deleting their identity record. Old templates
+are excluded from SDK identification until recaptured.
 
 ## 4. Run locally with the MFS100
 
@@ -109,6 +106,11 @@ Before committing, verify that neither `.env`, `index.json`, `.npy`, nor `.npz` 
 appear in `git status`.
 
 ## 6. Host on Render
+
+For the existing Streamlit Cloud deployment, push the changes to the FRS
+repository, retain its current entrypoint `demo_matcher/streamlit_app.py`,
+and follow the [upgrade guide](docs/MANTRA_MATCHING_UPGRADE.md). Render is an
+alternative, not a requirement.
 
 The included `render.yaml` describes a lightweight web service. Unlike
 FSD-XAI, this project does not load PyTorch or XAI packages, so it is suitable
@@ -159,10 +161,12 @@ it through a public reverse proxy.
 1. Enrol a real finger.
 2. Identify the same real finger and show the positive match.
 3. Present a spoof made from the same finger.
-4. Show that the recognition-only matcher can still return the enrolled user.
+4. Record whether the recognition-only matcher returns the enrolled user,
+   rejects the capture, or reports ambiguity; spoof acceptance is not guaranteed.
 5. Explain that similarity is not evidence of liveness.
 6. Demonstrate FSD-XAI separately as the PAD system.
 
-Use the same named finger and obtain a clear, flat capture. The matcher permits
-modest translation and rotation, but it is an ORB/RANSAC demonstration rather
-than a production minutiae matcher.
+Use the same named finger. Keep the threshold fixed across genuine and spoof
+trials. The default native score cutoff of 1400 is an uncalibrated demonstration
+setting, not a percentage or a certified operating point. This integration
+is not a production identity system, even though matching uses the vendor SDK.

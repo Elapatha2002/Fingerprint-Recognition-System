@@ -47,6 +47,7 @@
     let bridgeUrl = "http://127.0.0.1:8766";
     let connected = false;
     let firstRender = true;
+    let matching = null;
     const status = document.getElementById("status");
     const statusText = document.getElementById("statusText");
     const tokenInput = document.getElementById("token");
@@ -67,6 +68,7 @@
     function token() { return tokenInput.value.trim(); }
     async function request(path, options = {}) {
       const response = await fetch(`${bridgeUrl}${path}`, {
+        signal: AbortSignal.timeout(145000),
         cache: "no-store",
         mode: "cors",
         targetAddressSpace: "loopback",
@@ -86,6 +88,9 @@
       setStatus("", "Connecting to the local sensor…");
       try {
         const payload = await request("/status");
+        if (payload.protocol_version !== 2 || payload.matcher !== "Mantra MFS100 MatchISO") {
+          throw new Error("This bridge is outdated. Restart the updated FRS bridge on your PC.");
+        }
         localStorage.setItem(TOKEN_KEY, token());
         connected = true;
         captureButton.disabled = false;
@@ -100,6 +105,10 @@
     async function capture() {
       if (!connected) return connect();
       captureButton.disabled = true;
+      document.getElementById("connect").disabled = true;
+      const task = matching;
+      // Clear an earlier result immediately, including when the next capture fails.
+      setValue({ok: false, event_id: crypto.randomUUID(), pending: true});
       result.classList.remove("show");
       setStatus("", "Scanner started — place one finger flat on the sensor…");
       hint.textContent = "The SDK stops automatically after capture or timeout.";
@@ -107,18 +116,34 @@
         const payload = await request("/capture", {
           method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"
         });
+        if (!payload.iso_template || payload.protocol_version !== 2) {
+          throw new Error("No ISO template returned. Restart the updated FRS bridge.");
+        }
+        if (task) {
+          setStatus("", "Comparing ISO templates with the Mantra SDK…");
+          payload.match_result = await request("/match", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({probe: payload.iso_template,
+              candidates: task.candidates, request_id: task.request_id})
+          });
+          if (!matching || matching.request_id !== task.request_id) {
+            throw new Error("The enrolment directory changed. Capture again.");
+          }
+        }
         document.getElementById("preview").src = `data:image/png;base64,${payload.image_base64}`;
         document.getElementById("resultText").textContent =
           `${payload.width}×${payload.height} px · quality ${payload.quality ?? "not reported"} · NFIQ ${payload.nfiq ?? "not reported"}`;
         result.classList.add("show");
         setStatus("ready", "Fingerprint captured successfully");
-        hint.textContent = "The captured image is ready for enrolment or identification.";
+        hint.textContent = task ? "Native SDK comparison completed." : "The ISO template is ready for enrolment.";
         setValue(payload);
       } catch (error) {
+        setValue({ok: false, event_id: crypto.randomUUID(), error: "Capture or matching failed. See the sensor panel and try again."});
         setStatus("error", error.message || "Fingerprint capture failed.");
         hint.textContent = "Try again with a clean, dry finger held still on the scanner.";
       } finally {
         captureButton.disabled = !connected;
+        document.getElementById("connect").disabled = false;
         resize();
       }
     }
@@ -127,8 +152,9 @@
     captureButton.addEventListener("click", capture);
     tokenInput.addEventListener("keydown", event => { if (event.key === "Enter") connect(); });
     window.addEventListener("message", event => {
-      if (!event.data || event.data.type !== "streamlit:render") return;
+      if (event.source !== window.parent || !event.data || event.data.type !== "streamlit:render") return;
       bridgeUrl = (event.data.args.bridge_url || bridgeUrl).replace(/\/$/, "");
+      matching = event.data.args.matching || null;
       if (firstRender) {
         firstRender = false;
         tokenInput.value = localStorage.getItem(TOKEN_KEY) || "";

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'capture')]
+    [ValidateSet('status', 'capture', 'match')]
     [string]$Action = 'status',
     [ValidateRange(1, 120)]
     [int]$TimeoutSeconds = 15,
@@ -49,6 +49,8 @@ try {
         $info = $device.GetDeviceInfo()
         $base = [ordered]@{
             ok = $true
+            protocol_version = 2
+            matcher = 'Mantra MFS100 MatchISO'
             serial = $info.SerialNo
             model = $info.Model
             make = $info.Make
@@ -59,6 +61,29 @@ try {
 
         if ($Action -eq 'status') {
             Write-Result $base
+            exit 0
+        }
+
+        if ($Action -eq 'match') {
+            # Templates arrive over stdin, never command arguments, files or logs.
+            $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            $probe = [Convert]::FromBase64String($request.probe)
+            $scores = @()
+            foreach ($candidate in $request.candidates) {
+                $reference = [Convert]::FromBase64String($candidate.template)
+                [int]$score = 0
+                $matchCode = $device.MatchISO($probe, $reference, [ref]$score)
+                if ($matchCode -ne 0) {
+                    throw "MFS100 matching failed ($matchCode): $($device.GetErrorMsg($matchCode))"
+                }
+                if ($score -lt 0) { throw 'The SDK returned an invalid match score.' }
+                $scores += @{ user_id = $candidate.user_id; score = $score }
+            }
+            Write-Result ([ordered]@{
+                ok = $true; protocol_version = 2; engine = 'Mantra MFS100 MatchISO'
+                request_id = $request.request_id; scores = @($scores)
+                sdk_version = $device.GetSDKVersion()
+            })
             exit 0
         }
 
@@ -99,6 +124,10 @@ try {
         $base.nfiq = $finger.Nfiq
         $base.captured_at = [DateTime]::UtcNow.ToString('o')
         $base.capture_id = [Guid]::NewGuid().ToString('N')
+        if ($null -eq $finger.ISOTemplate -or $finger.ISOTemplate.Length -lt 24) {
+            throw 'The SDK did not return an ISO fingerprint template. Capture again.'
+        }
+        $base.iso_template = [Convert]::ToBase64String($finger.ISOTemplate)
         Write-Result $base
     }
     finally {

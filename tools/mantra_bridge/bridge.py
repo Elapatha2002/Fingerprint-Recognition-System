@@ -19,6 +19,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if __package__:
+    from .protocol import MAX_REQUEST_BYTES, validate_match_request
+else:
+    # Also support copying the complete bridge folder to an evaluator PC.
+    from protocol import MAX_REQUEST_BYTES, validate_match_request
 HELPER = Path(__file__).with_name("capture.ps1")
 DEFAULT_SDK = Path(r"C:\Program Files\Mantra\MFS100\Driver\MFS100Test")
 CAPTURE_LOCK = threading.Lock()
@@ -35,7 +42,7 @@ def _powershell32() -> Path:
     raise RuntimeError("32-bit Windows PowerShell was not found.")
 
 
-def run_sdk(action: str, timeout_seconds: int) -> tuple[int, dict]:
+def run_sdk(action: str, timeout_seconds: int, request: dict | None = None) -> tuple[int, dict]:
     sdk = os.environ.get("MFS100_SDK_DIR", str(DEFAULT_SDK))
     command = [
         str(_powershell32()), "-NoProfile", "-NonInteractive",
@@ -47,6 +54,7 @@ def run_sdk(action: str, timeout_seconds: int) -> tuple[int, dict]:
         result = subprocess.run(
             command, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout_seconds + 12,
+            input=json.dumps(request) if request is not None else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired:
@@ -109,7 +117,11 @@ class BridgeServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Fingerprint-Recognition-Mantra-Bridge/1.0"
+    server_version = "Fingerprint-Recognition-Mantra-Bridge/2.0"
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(15)
 
     @property
     def bridge(self) -> BridgeServer:
@@ -173,28 +185,46 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
-        status, payload = run_sdk("status", 5)
-        self._json(status, payload)
+        # Both Streamlit tabs can initialise their controls together. Serialize
+        # short status checks instead of making the second tab fail immediately.
+        if not CAPTURE_LOCK.acquire(timeout=6):
+            self._json(HTTPStatus.CONFLICT, {"ok": False, "error": "The scanner is busy."})
+            return
+        try:
+            status, payload = run_sdk("status", 5)
+            self._json(status, payload)
+        finally:
+            CAPTURE_LOCK.release()
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/capture":
+        if self.path not in {"/capture", "/match"}:
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
             return
         if not self._authorized():
             return
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length > 1024:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid body length."})
+            return
+        limit = MAX_REQUEST_BYTES if self.path == "/match" else 1024
+        if length < 0 or length > limit or self.headers.get("Transfer-Encoding"):
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                        {"ok": False, "error": "Request body is too large."})
             return
-        if length:
-            self.rfile.read(length)
+        try:
+            body = self.rfile.read(length) if length else b"{}"
+            request = validate_match_request(json.loads(body)) if self.path == "/match" else None
+        except (ValueError, OSError):
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid matching request or ISO template."})
+            return
         if not CAPTURE_LOCK.acquire(blocking=False):
             self._json(HTTPStatus.CONFLICT,
-                       {"ok": False, "error": "A fingerprint capture is already running."})
+                       {"ok": False, "error": "The scanner is busy capturing or matching."})
             return
         try:
-            status, payload = run_sdk("capture", self.bridge.capture_timeout)
+            status, payload = (run_sdk("match", 60, request) if self.path == "/match"
+                               else run_sdk("capture", self.bridge.capture_timeout))
             self._json(status, payload)
         finally:
             CAPTURE_LOCK.release()
@@ -217,7 +247,8 @@ def main() -> int:
               file=sys.stderr)
         return 2
     args = parse_args()
-    defaults = {"http://localhost:8501", "http://127.0.0.1:8501"}
+    defaults = {"http://localhost:8501", "http://127.0.0.1:8501",
+                "http://localhost:8502", "http://127.0.0.1:8502"}
     env_origins = {item.strip().rstrip("/") for item in
                    os.environ.get("FRS_ALLOWED_ORIGINS", "").split(",") if item.strip()}
     origins = defaults | env_origins | {item.rstrip("/") for item in args.allow_origin}

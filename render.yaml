@@ -13,8 +13,8 @@ services:
         sync: false
       - key: FRS_ACCESS_PASSWORD_HASH
         sync: false
-      - key: MATCH_THRESHOLD
-        value: "0.55"
+      - key: FRS_MANTRA_MATCH_THRESHOLD
+        value: "1400"
       - key: MANTRA_SENSOR_TRANSPORT
         value: bridge
       - key: MANTRA_BRIDGE_URL

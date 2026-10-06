@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from PIL import Image
+from tools.mantra_bridge.protocol import iso_template, validate_match_request
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ class CaptureResult:
     captured_at: str
     serial: str | None = None
     capture_id: str | None = None
+    iso_template: str | None = None
 
     def pil_image(self) -> Image.Image:
         return Image.open(io.BytesIO(self.image_bytes))
@@ -65,7 +67,7 @@ def _powershell32() -> Path:
     raise SensorError("32-bit Windows PowerShell was not found.")
 
 
-def _run_helper(action: str, timeout_seconds: int) -> dict:
+def _run_helper(action: str, timeout_seconds: int, request: dict | None = None) -> dict:
     if not CAPTURE_HELPER.is_file():
         raise SensorError(f"Sensor helper is missing: {CAPTURE_HELPER}")
     sdk_dir = os.environ.get("MFS100_SDK_DIR", str(DEFAULT_SDK_DIR))
@@ -83,6 +85,7 @@ def _run_helper(action: str, timeout_seconds: int) -> dict:
             encoding="utf-8",
             errors="replace",
             timeout=timeout_seconds + 12,
+            input=json.dumps(request) if request is not None else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as error:
@@ -115,6 +118,9 @@ def is_available() -> tuple[bool, str]:
 
 def from_bridge_payload(payload: dict) -> CaptureResult:
     try:
+        if payload.get("protocol_version") != 2 or not payload.get("iso_template"):
+            raise SensorError("Restart the updated FRS bridge: this capture has no Mantra ISO template.")
+        iso_template(payload["iso_template"])
         image_bytes = base64.b64decode(payload["image_base64"], validate=True)
         with Image.open(io.BytesIO(image_bytes)) as image:
             image.verify()
@@ -127,6 +133,7 @@ def from_bridge_payload(payload: dict) -> CaptureResult:
             captured_at=str(payload.get("captured_at") or datetime.now(timezone.utc).isoformat()),
             serial=payload.get("serial"),
             capture_id=payload.get("capture_id"),
+            iso_template=payload["iso_template"],
         )
     except (KeyError, ValueError, TypeError, OSError) as error:
         raise SensorError("The bridge returned an invalid fingerprint image.") from error
@@ -136,3 +143,10 @@ def capture_fingerprint(timeout_seconds: int = 20) -> CaptureResult:
     if capture_transport() != "direct":
         raise SensorError("Hosted capture must use the browser-side bridge controls.")
     return from_bridge_payload(_run_helper("capture", max(5, min(timeout_seconds, 120))))
+
+
+def match_templates(probe: str, candidates: list, request_id: str) -> dict:
+    if capture_transport() != "direct":
+        raise SensorError("Hosted matching must use the local browser bridge.")
+    request = validate_match_request({"probe": probe, "candidates": candidates, "request_id": request_id})
+    return _run_helper("match", 60, request)

@@ -10,6 +10,6 @@ component = components.declare_component(
 )
 
 
-def render_mantra_capture(*, bridge_url: str, key: str):
+def render_mantra_capture(*, bridge_url: str, key: str, matching: dict | None = None):
     """Return a captured bridge payload while keeping its token in the browser."""
-    return component(bridge_url=bridge_url, key=key, default=None)
+    return component(bridge_url=bridge_url, matching=matching, key=key, default=None)
